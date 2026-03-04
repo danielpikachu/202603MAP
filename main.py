@@ -1,6 +1,5 @@
 import json
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+import plotly.graph_objects as go
 import numpy as np
 import streamlit as st
 import gspread
@@ -8,9 +7,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 import os
 
-plt.switch_backend('Agg')
-
-st.set_page_config(page_title="SCIS Navigation System")
+st.set_page_config(page_title="SCIS Navigation System", layout="wide")
 
 # --------------------------
 # Google Sheets 配置（适配 Streamlit Secrets TOML）
@@ -116,7 +113,7 @@ def get_total_accesses(worksheet):
         return 0
 
 # --------------------------
-# 地图与导航核心逻辑（保持不变）
+# 地图与导航核心逻辑（修改为Plotly）
 # --------------------------
 COLORS = {
     'building': {'A': 'lightblue', 'B': 'lightgreen', 'C': 'lightcoral'},
@@ -153,12 +150,8 @@ def load_school_data_detailed(filename):
         return None
 
 def plot_3d_map(school_data, display_options=None):
-    fig = plt.figure(figsize=(35, 30))
-    ax = fig.add_subplot(111, projection='3d')
-
-    ax.tick_params(axis='x', labelsize=14)
-    ax.tick_params(axis='y', labelsize=14)
-    ax.tick_params(axis='z', labelsize=14)
+    """使用Plotly创建可交互的3D地图"""
+    fig = go.Figure()
 
     if display_options is None:
         display_options = {
@@ -225,25 +218,29 @@ def plot_3d_map(school_data, display_options=None):
 
             if show_level:
                 fp = level['floorPlane']
-                plane_vertices = [
-                    [fp['minX'], fp['minY'], z],
-                    [fp['maxX'], fp['minY'], z],
-                    [fp['maxX'], fp['maxY'], z],
-                    [fp['minX'], fp['maxY'], z],
-                    [fp['minX'], fp['minY'], z]
-                ]
-                x_plane = [p[0] for p in plane_vertices]
-                y_plane = [p[1] for p in plane_vertices]
-                z_plane = [p[2] for p in plane_vertices]
+                # 添加楼层平面
+                x_plane = [fp['minX'], fp['maxX'], fp['maxX'], fp['minX'], fp['minX']]
+                y_plane = [fp['minY'], fp['minY'], fp['maxY'], fp['maxY'], fp['minY']]
+                z_plane = [z, z, z, z, z]
                 
-                legend_label = f"Building {building_name}-{level_name}"
-                if legend_label not in ax.get_legend_handles_labels()[1]:
-                    ax.plot(x_plane, y_plane, z_plane, color=floor_border_color, linewidth=4, label=legend_label)
-                else:
-                    ax.plot(x_plane, y_plane, z_plane, color=floor_border_color, linewidth=4)
-                ax.plot_trisurf(x_plane[:-1], y_plane[:-1], z_plane[:-1], 
-                                color=building_fill_color, alpha=0.3)
+                # 添加楼层边框
+                fig.add_trace(go.Scatter3d(
+                    x=x_plane, y=y_plane, z=z_plane,
+                    mode='lines',
+                    line=dict(color=floor_border_color, width=4),
+                    name=f"Building {building_name}-{level_name}",
+                    showlegend=True
+                ))
+                
+                # 添加楼层填充面
+                fig.add_trace(go.Mesh3d(
+                    x=x_plane[:-1], y=y_plane[:-1], z=z_plane[:-1],
+                    color=building_fill_color,
+                    opacity=0.3,
+                    showlegend=False
+                ))
 
+                # 添加走廊
                 for corr_idx, corridor in enumerate(level['corridors']):
                     points = corridor['points']
                     x = [p[0] for p in points]
@@ -254,51 +251,77 @@ def plot_3d_map(school_data, display_options=None):
                     if is_external:
                         ext_style = corridor.get('style', {})
                         corr_line_color = ext_style.get('color', 'gray')
-                        corr_line_style = ext_style.get('lineType', '--')
+                        corr_line_style = 'dash'
                         corr_line_width = 10
                         corr_label = f"External Corridor ({building_name}-{corridor.get('name', f'corr{corr_idx}')})"
                     
                     elif 'name' in corridor and ('connectToBuilding' in corridor['name']):
                         corr_line_color = COLORS['connect_corridor']
-                        corr_line_style = '-'
+                        corr_line_style = 'solid'
                         corr_line_width = 12
                         corr_label = f"Connecting Corridor ({building_name}-{level_name})"
                     
                     else:
                         corr_line_color = COLORS['corridor_line'].get(building_name, 'gray')
-                        corr_line_style = '-'
+                        corr_line_style = 'solid'
                         corr_line_width = 8
                         corr_label = None
                     
-                    if corr_label and corr_label not in ax.get_legend_handles_labels()[1]:
-                        ax.plot(x, y, z_coords, 
-                                color=corr_line_color, 
-                                linestyle=corr_line_style,
-                                linewidth=corr_line_width, 
-                                alpha=0.8, 
-                                label=corr_label)
-                    else:
-                        ax.plot(x, y, z_coords, 
-                                color=corr_line_color, 
-                                linestyle=corr_line_style,
-                                linewidth=corr_line_width, 
-                                alpha=0.8)
+                    # 添加走廊线条
+                    fig.add_trace(go.Scatter3d(
+                        x=x, y=y, z=z_coords,
+                        mode='lines',
+                        line=dict(color=corr_line_color, width=corr_line_width, dash=corr_line_style),
+                        name=corr_label if corr_label else "",
+                        showlegend=bool(corr_label)
+                    ))
                     
-                    for px, py, pz in points:
-                        ax.scatter(px, py, pz, color=COLORS['corridor_node'], s=40, marker='s', alpha=0.9)
+                    # 添加走廊节点
+                    fig.add_trace(go.Scatter3d(
+                        x=[p[0] for p in points], 
+                        y=[p[1] for p in points], 
+                        z=[p[2] for p in points],
+                        mode='markers',
+                        marker=dict(color=COLORS['corridor_node'], size=5, symbol='square'),
+                        showlegend=False
+                    ))
 
+                # 添加教室
                 for classroom in level['classrooms']:
                     x, y, _ = classroom['coordinates']
                     width, depth = classroom['size']
                     class_name = classroom['name']
 
-                    ax.text(x, y, z, class_name, color=COLORS['classroom_label'], fontweight='bold', fontsize=14)
-                    ax.scatter(x, y, z, color=building_fill_color, s=160, edgecolors=floor_border_color)
-                    ax.plot([x, x + width, x + width, x, x],
-                            [y, y, y + depth, y + depth, y],
-                            [z, z, z, z, z],
-                            color=floor_border_color, linestyle='--', alpha=0.6, linewidth=2)
+                    # 添加教室标签
+                    fig.add_trace(go.Scatter3d(
+                        x=[x], y=[y], z=[z],
+                        mode='text',
+                        text=class_name,
+                        textfont=dict(color=COLORS['classroom_label'], size=14, weight='bold'),
+                        showlegend=False
+                    ))
+                    
+                    # 添加教室标记
+                    fig.add_trace(go.Scatter3d(
+                        x=[x], y=[y], z=[z],
+                        mode='markers',
+                        marker=dict(color=building_fill_color, size=8, symbol='circle', 
+                                   line=dict(color=floor_border_color, width=2)),
+                        showlegend=False
+                    ))
+                    
+                    # 添加教室边框
+                    class_x = [x, x + width, x + width, x, x]
+                    class_y = [y, y, y + depth, y + depth, y]
+                    class_z = [z, z, z, z, z]
+                    fig.add_trace(go.Scatter3d(
+                        x=class_x, y=class_y, z=class_z,
+                        mode='lines',
+                        line=dict(color=floor_border_color, width=2, dash='dash'),
+                        showlegend=False
+                    ))
 
+            # 添加楼梯
             for stair in level['stairs']:
                 stair_name = stair['name']
                 is_path_stair = (building_name, stair_name, level_name) in path_stairs
@@ -309,17 +332,19 @@ def plot_3d_map(school_data, display_options=None):
                     
                     stair_color = COLORS['stair'].get(stair_name, 'red')
                     
-                    marker_size = 800 if is_path_stair else 600
-                    marker_edge_width = 3 if is_path_stair else 1
+                    marker_size = 15 if is_path_stair else 12
                     
-                    if stair_label not in ax.get_legend_handles_labels()[1]:
-                        ax.scatter(x, y, z, color=stair_color, s=marker_size, marker='^', 
-                                  label=stair_label, edgecolors='black', linewidths=marker_edge_width)
-                    else:
-                        ax.scatter(x, y, z, color=stair_color, s=marker_size, marker='^',
-                                  edgecolors='black', linewidths=marker_edge_width)
-                    
-                    ax.text(x, y, z, stair_name, color=COLORS['stair_label'], fontweight='bold', fontsize=14)
+                    # 添加楼梯标记
+                    fig.add_trace(go.Scatter3d(
+                        x=[x], y=[y], z=[z],
+                        mode='markers+text',
+                        marker=dict(color=stair_color, size=marker_size, symbol='triangle-up',
+                                   line=dict(color='black', width=3 if is_path_stair else 1)),
+                        text=stair_name,
+                        textfont=dict(color=COLORS['stair_label'], size=14, weight='bold'),
+                        name=stair_label,
+                        showlegend=True
+                    ))
         
         if level_count > 0 and len(displayed_levels) > 0:
             if building_name == 'B':
@@ -331,20 +356,18 @@ def plot_3d_map(school_data, display_options=None):
             
             building_label_positions[building_name] = (center_x, label_y, label_z)
 
+    # 添加建筑物标签
     for building_name, (x, y, z) in building_label_positions.items():
-        bbox_props = dict(boxstyle="round,pad=0.3", edgecolor="black", 
-                        facecolor=COLORS['building'].get(building_name, 'lightgray'), alpha=0.7)
-        ax.text(
-            x, y, z, 
-            f"Building {building_name}", 
-            color=COLORS['building_label'].get(building_name, 'black'), 
-            fontweight='bold', 
-            fontsize=30,
-            ha='center', 
-            va='center', 
-            bbox=bbox_props
-        )
+        fig.add_trace(go.Scatter3d(
+            x=[x], y=[y], z=[z],
+            mode='text',
+            text=f"Building {building_name}",
+            textfont=dict(color=COLORS['building_label'].get(building_name, 'black'), 
+                         size=30, weight='bold'),
+            showlegend=False
+        ))
 
+    # 添加导航路径
     if path and not show_all:
         try:
             x = []
@@ -366,23 +389,78 @@ def plot_3d_map(school_data, display_options=None):
                 else:
                     labels.append("")
 
-            ax.plot(x, y, z, color=COLORS['path'], linewidth=6, linestyle='-', marker='o', markersize=10, label='Navigation Path')
-            ax.scatter(x[0], y[0], z[0], color=COLORS['start_marker'], s=1000, marker='*', label='Start', edgecolors='black')
-            ax.scatter(x[-1], y[-1], z[-1], color=COLORS['end_marker'], s=1000, marker='*', label='End', edgecolors='black')
-            ax.text(x[0], y[0], z[0], f"Start\n{labels[0]}", color=COLORS['start_label'], fontweight='bold', fontsize=16)
-            ax.text(x[-1], y[-1], z[-1], f"End\n{labels[-1]}", color=COLORS['end_label'], fontweight='bold', fontsize=16)
+            # 添加路径线条
+            fig.add_trace(go.Scatter3d(
+                x=x, y=y, z=z,
+                mode='lines+markers',
+                line=dict(color=COLORS['path'], width=6),
+                marker=dict(size=5, color=COLORS['path']),
+                name='Navigation Path',
+                showlegend=True
+            ))
+            
+            # 添加起点标记
+            fig.add_trace(go.Scatter3d(
+                x=[x[0]], y=[y[0]], z=[z[0]],
+                mode='markers+text',
+                marker=dict(color=COLORS['start_marker'], size=20, symbol='star',
+                           line=dict(color='black', width=2)),
+                text=f"Start\n{labels[0]}",
+                textfont=dict(color=COLORS['start_label'], size=16, weight='bold'),
+                name='Start',
+                showlegend=True
+            ))
+            
+            # 添加终点标记
+            fig.add_trace(go.Scatter3d(
+                x=[x[-1]], y=[y[-1]], z=[z[-1]],
+                mode='markers+text',
+                marker=dict(color=COLORS['end_marker'], size=20, symbol='star',
+                           line=dict(color='black', width=2)),
+                text=f"End\n{labels[-1]}",
+                textfont=dict(color=COLORS['end_label'], size=16, weight='bold'),
+                name='End',
+                showlegend=True
+            ))
         except Exception as e:
             st.warning(f"Path drawing warning: {str(e)}")
 
-    ax.set_xlabel('X Coordinate', fontsize=18, fontweight='bold')
-    ax.set_ylabel('Y Coordinate', fontsize=18, fontweight='bold')
-    ax.set_zlabel('Floor Height (Z Value)', fontsize=18, fontweight='bold')
-    ax.set_title('Campus 3D Navigation Map (A/B/C Building Navigation)', fontsize=24, fontweight='bold', pad=20)
+    # 设置布局
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(title='X Coordinate', titlefont=dict(size=18, weight='bold'),
+                      tickfont=dict(size=14)),
+            yaxis=dict(title='Y Coordinate', titlefont=dict(size=18, weight='bold'),
+                      tickfont=dict(size=14)),
+            zaxis=dict(title='Floor Height (Z Value)', titlefont=dict(size=18, weight='bold'),
+                      tickfont=dict(size=14)),
+            camera=dict(
+                eye=dict(x=1.5, y=1.5, z=1.0)
+            ),
+            dragmode='orbit',  # 支持轨道旋转
+        ),
+        title=dict(
+            text='Campus 3D Navigation Map (A/B/C Building Navigation)',
+            font=dict(size=24, weight='bold'),
+            pad=dict(t=20)
+        ),
+        legend=dict(
+            x=1.05, y=1,
+            font=dict(size=16),
+            bgcolor='rgba(255,255,255,0.8)'
+        ),
+        width=1400,
+        height=900,
+        margin=dict(l=0, r=0, t=50, b=0)
+    )
     
-    ax.legend(loc='upper left', bbox_to_anchor=(1, 1), fontsize=16, frameon=True)
-    ax.grid(True, alpha=0.3, linewidth=2)
+    # 启用滚轮缩放
+    fig.update_layout(scene=dict(
+        scrollzoom=True,  # 关键：启用滚轮缩放
+        hovermode='closest'
+    ))
 
-    return fig, ax
+    return fig
 
 class Graph:
     def __init__(self):
@@ -420,7 +498,7 @@ class Graph:
             self.nodes[node2_id]['neighbors'][node1_id] = weight
 
 def euclidean_distance(coords1, coords2):
-    return np.sqrt(sum((a - b) **2 for a, b in zip(coords1, coords2)))
+    return np.sqrt(sum((a - b)**2 for a, b in zip(coords1, coords2)))
 
 def build_navigation_graph(school_data):
     graph = Graph()
@@ -739,34 +817,6 @@ def navigate(graph, start_building, start_classroom, start_level, end_building, 
     except Exception as e:
         return None, f"Navigation error: {str(e)}", None, None
 
-def plot_path(ax, graph, path):
-    try:
-        x = []
-        y = []
-        z = []
-        labels = []
-
-        for node_id in path:
-            coords = graph.nodes[node_id]['coordinates']
-            x.append(coords[0])
-            y.append(coords[1])
-            z.append(coords[2])
-            
-            node_type = graph.nodes[node_id]['type']
-            if node_type == 'classroom':
-                labels.append(graph.nodes[node_id]['name'])
-            elif node_type == 'stair':
-                labels.append(graph.nodes[node_id]['name'])
-            else:
-                labels.append("")
-
-        ax.plot(x, y, z, color=COLORS['path'], linewidth=10, linestyle='-', marker='o', markersize=10)
-       
-
-        ax.legend(loc='upper left', bbox_to_anchor=(1, 1), fontsize=16)
-    except Exception as e:
-        st.error(f"Failed to draw path: {str(e)}")
-
 def get_classroom_info(school_data):
     try:
         buildings = [b for b in school_data.keys() if b.startswith('building')]
@@ -876,10 +926,12 @@ def welcome_page():
             update_access_count(st.session_state['worksheet'])
             st.session_state['page'] = 'main'
             st.rerun()
-    
    
         st.markdown(f'<div class="access-count">Total Accesses: {total_accesses}</div>', unsafe_allow_html=True)
-    st.image("welcome_image.jpg", use_column_width=True)
+    try:
+        st.image("welcome_image.jpg", use_column_width=True)
+    except:
+        pass
     st.markdown('</div>', unsafe_allow_html=True)
 
 def main_interface():
@@ -1021,12 +1073,11 @@ def main_interface():
         
         try:
             if st.session_state['current_path'] is not None:
-                fig, ax = plot_3d_map(school_data, st.session_state['display_options'])
-                plot_path(ax, graph, st.session_state['current_path'])
+                fig = plot_3d_map(school_data, st.session_state['display_options'])
             else:
-                fig, ax = plot_3d_map(school_data)
+                fig = plot_3d_map(school_data)
             
-            st.pyplot(fig)
+            st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
             st.error(f"Failed to display map: {str(e)}")
 
@@ -1043,26 +1094,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
